@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI, Request
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -8,42 +8,22 @@ import os
 import uuid
 import traceback
 
-# Load env vars
 load_dotenv()
+
+app = FastAPI()
 
 url = os.environ.get("SUPABASE_URL")
 key = os.environ.get("SUPABASE_KEY")
 
 supabase = create_client(url, key)
 
-# FastAPI app
-app = FastAPI()
-
-# Lazy-loaded model
-model = None
-
-def get_model():
-    global model
-    if model is None:
-        print("Loading model...")
-        model = SentenceTransformer("all-MiniLM-L6-v2")
-    return model
+model = SentenceTransformer("all-MiniLM-L6-v2")
 
 TOP_PROJECTS_NUM = 3
 
 
-# ✅ Health check route (important for Render)
-@app.get("/")
-def root():
-    return {"status": "API is running"}
-
-
-# ✅ Main matching logic
 def run_matching(chosen_term, job_id):
 
-    print(f"Starting matching for job {job_id}")
-
-    # Archive old results
     supabase.table("results_tab") \
         .update({"status": "archived"}) \
         .eq("term", chosen_term) \
@@ -51,19 +31,8 @@ def run_matching(chosen_term, job_id):
 
     match_id = str(uuid.uuid4())
 
-    interns_by_term = (
-        supabase.table("resumes")
-        .select("*")
-        .eq("term", chosen_term)
-        .execute()
-    )
-
-    projects_by_term = (
-        supabase.table("projects")
-        .select("*")
-        .eq("term", chosen_term)
-        .execute()
-    )
+    interns_by_term = supabase.table("resumes").select("*").eq("term", chosen_term).execute()
+    projects_by_term = supabase.table("projects").select("*").eq("term", chosen_term).execute()
 
     interns_df = pd.DataFrame(interns_by_term.data)
     projects_df = pd.DataFrame(projects_by_term.data)
@@ -76,9 +45,6 @@ def run_matching(chosen_term, job_id):
         .fillna("")
         .agg(" ".join, axis=1)
     )
-
-    # ✅ Load model only when needed
-    model = get_model()
 
     intern_embeddings = model.encode(
         interns_df["text"].tolist(),
@@ -94,8 +60,10 @@ def run_matching(chosen_term, job_id):
 
     for intern_idx, intern_row in interns_df.iterrows():
 
+        intern_vector = intern_embeddings[intern_idx]
+
         similarities = cosine_similarity(
-            [intern_embeddings[intern_idx]],
+            [intern_vector],
             project_embeddings
         )[0]
 
@@ -127,34 +95,26 @@ def run_matching(chosen_term, job_id):
     if results:
         supabase.table("results_tab").insert(results).execute()
 
-    print(f"Matching completed for {job_id}")
+    return True
 
 
-# ✅ Webhook endpoint
+# 🚀 THIS replaces your while loop
 @app.post("/run-job")
-async def run_job(request: Request, background_tasks: BackgroundTasks):
+async def run_job(request: Request):
 
-    payload = await request.json()
-    record = payload.get("record", {})
+    try:
+        data = await request.json()
 
-    job_id = record.get("id")
-    chosen_term = record.get("term")
-    status = record.get("status")
+        job_id = data.get("job_id")
+        chosen_term = data.get("term")
 
-    print("Webhook received:", record)
+        print("Running job:", job_id)
 
-    # ✅ Ignore non-ready jobs
-    if status != "ready":
-        return {"message": "ignored (not ready)"}
+        supabase.table("jobs").update({
+            "status": "processing",
+            "python_error": None
+        }).eq("id", job_id).execute()
 
-    # ✅ Mark job as processing
-    supabase.table("jobs").update({
-        "status": "processing",
-        "python_error": None
-    }).eq("id", job_id).execute()
-
-    # ✅ Run in background (so webhook returns fast)
-    def process_job():
         try:
             run_matching(chosen_term, job_id)
 
@@ -162,19 +122,17 @@ async def run_job(request: Request, background_tasks: BackgroundTasks):
                 "status": "completed"
             }).eq("id", job_id).execute()
 
-            print("Job completed:", job_id)
+            return {"status": "completed"}
 
         except Exception:
             error_text = traceback.format_exc()
-
-            print("Job failed:", job_id)
-            print(error_text)
 
             supabase.table("jobs").update({
                 "status": "failed",
                 "python_error": error_text
             }).eq("id", job_id).execute()
 
-    background_tasks.add_task(process_job)
+            return {"status": "failed", "error": error_text}
 
-    return {"message": "job accepted"}
+    except Exception as e:
+        return {"error": str(e)}
