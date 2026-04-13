@@ -8,22 +8,40 @@ import os
 import uuid
 import traceback
 
+# Load env vars
 load_dotenv()
 
+# FastAPI app
 app = FastAPI()
 
+# Supabase setup
 url = os.environ.get("SUPABASE_URL")
 key = os.environ.get("SUPABASE_KEY")
-
 supabase = create_client(url, key)
 
-model = SentenceTransformer("all-MiniLM-L6-v2")
+# Lazy-load model (IMPORTANT for Render)
+model = None
+
+def get_model():
+    global model
+    if model is None:
+        print("Loading model...")
+        model = SentenceTransformer("all-MiniLM-L6-v2")
+        print("Model loaded.")
+    return model
 
 TOP_PROJECTS_NUM = 3
 
 
+# ✅ Health check route (prevents Render port issues)
+@app.get("/")
+def root():
+    return {"status": "API is running"}
+
+
 def run_matching(chosen_term, job_id):
 
+    # Archive old results
     supabase.table("results_tab") \
         .update({"status": "archived"}) \
         .eq("term", chosen_term) \
@@ -31,8 +49,19 @@ def run_matching(chosen_term, job_id):
 
     match_id = str(uuid.uuid4())
 
-    interns_by_term = supabase.table("resumes").select("*").eq("term", chosen_term).execute()
-    projects_by_term = supabase.table("projects").select("*").eq("term", chosen_term).execute()
+    interns_by_term = (
+        supabase.table("resumes")
+        .select("*")
+        .eq("term", chosen_term)
+        .execute()
+    )
+
+    projects_by_term = (
+        supabase.table("projects")
+        .select("*")
+        .eq("term", chosen_term)
+        .execute()
+    )
 
     interns_df = pd.DataFrame(interns_by_term.data)
     projects_df = pd.DataFrame(projects_by_term.data)
@@ -46,12 +75,15 @@ def run_matching(chosen_term, job_id):
         .agg(" ".join, axis=1)
     )
 
-    intern_embeddings = model.encode(
+    # Load model ONLY when needed
+    model_instance = get_model()
+
+    intern_embeddings = model_instance.encode(
         interns_df["text"].tolist(),
         convert_to_numpy=True
     )
 
-    project_embeddings = model.encode(
+    project_embeddings = model_instance.encode(
         projects_df["combined_text"].tolist(),
         convert_to_numpy=True
     )
@@ -95,10 +127,11 @@ def run_matching(chosen_term, job_id):
     if results:
         supabase.table("results_tab").insert(results).execute()
 
+    print("Matching completed for:", chosen_term)
     return True
 
 
-# 🚀 THIS replaces your while loop
+# 🚀 Event-driven endpoint (replaces your while loop)
 @app.post("/run-job")
 async def run_job(request: Request):
 
@@ -110,6 +143,7 @@ async def run_job(request: Request):
 
         print("Running job:", job_id)
 
+        # Mark job as processing
         supabase.table("jobs").update({
             "status": "processing",
             "python_error": None
@@ -118,14 +152,19 @@ async def run_job(request: Request):
         try:
             run_matching(chosen_term, job_id)
 
+            # Mark job completed
             supabase.table("jobs").update({
                 "status": "completed"
             }).eq("id", job_id).execute()
 
+            print("Job finished:", job_id)
             return {"status": "completed"}
 
         except Exception:
             error_text = traceback.format_exc()
+
+            print("Job failed:", job_id)
+            print(error_text)
 
             supabase.table("jobs").update({
                 "status": "failed",
