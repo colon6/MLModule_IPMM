@@ -1,6 +1,5 @@
 from fastapi import FastAPI, Request, BackgroundTasks
 import pandas as pd
-from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from supabase import create_client
 from dotenv import load_dotenv
@@ -8,40 +7,61 @@ import os
 import uuid
 import traceback
 
-# Load env vars
+# =========================
+# LOAD ENV
+# =========================
 load_dotenv()
 
 url = os.environ.get("SUPABASE_URL")
 key = os.environ.get("SUPABASE_KEY")
 
+if not url or not key:
+    raise Exception("Missing SUPABASE_URL or SUPABASE_KEY")
+
 supabase = create_client(url, key)
 
-# FastAPI app
+print("🚀 Supabase connected")
+
+# =========================
+# FASTAPI APP
+# =========================
 app = FastAPI()
 
-# Lazy-loaded model
+print("🚀 API starting...")
+
+# =========================
+# LAZY MODEL LOADING
+# =========================
 model = None
 
 def get_model():
     global model
     if model is None:
-        print("Loading model...")
+        print("📦 Loading SentenceTransformer model...")
+        from sentence_transformers import SentenceTransformer
         model = SentenceTransformer("all-MiniLM-L6-v2")
+        print("✅ Model loaded")
     return model
+
 
 TOP_PROJECTS_NUM = 3
 
 
-# ✅ Health check route (important for Render)
+# =========================
+# HEALTH CHECK
+# =========================
 @app.get("/")
 def root():
+    print("Health check hit")
     return {"status": "API is running"}
 
 
-# ✅ Main matching logic
+# =========================
+# CORE MATCHING LOGIC
+# =========================
 def run_matching(chosen_term, job_id):
 
-    print(f"Starting matching for job {job_id}")
+    print(f"⚙️ Starting matching for job {job_id}")
 
     # Archive old results
     supabase.table("results_tab") \
@@ -65,19 +85,20 @@ def run_matching(chosen_term, job_id):
         .execute()
     )
 
-    interns_df = pd.DataFrame(interns_by_term.data)
-    projects_df = pd.DataFrame(projects_by_term.data)
+    interns_df = pd.DataFrame(interns_by_term.data or [])
+    projects_df = pd.DataFrame(projects_by_term.data or [])
 
     if interns_df.empty or projects_df.empty:
         raise Exception("No interns or projects found for this term")
 
+    # Combine project text
     projects_df["combined_text"] = (
         projects_df[["description", "deliverable", "requirements"]]
         .fillna("")
         .agg(" ".join, axis=1)
     )
 
-    # ✅ Load model only when needed
+    # Load model safely
     model = get_model()
 
     intern_embeddings = model.encode(
@@ -127,10 +148,12 @@ def run_matching(chosen_term, job_id):
     if results:
         supabase.table("results_tab").insert(results).execute()
 
-    print(f"Matching completed for {job_id}")
+    print(f"✅ Matching completed for {job_id}")
 
 
-# ✅ Webhook endpoint
+# =========================
+# WEBHOOK ENDPOINT
+# =========================
 @app.post("/run-job")
 async def run_job(request: Request, background_tasks: BackgroundTasks):
 
@@ -143,17 +166,17 @@ async def run_job(request: Request, background_tasks: BackgroundTasks):
 
     print("Webhook received:", record)
 
-    # ✅ Ignore non-ready jobs
+    # Ignore non-ready jobs
     if status != "ready":
         return {"message": "ignored (not ready)"}
 
-    # ✅ Mark job as processing
+    # Mark processing
     supabase.table("jobs").update({
         "status": "processing",
         "python_error": None
     }).eq("id", job_id).execute()
 
-    # ✅ Run in background (so webhook returns fast)
+    # Background processing
     def process_job():
         try:
             run_matching(chosen_term, job_id)
@@ -162,12 +185,12 @@ async def run_job(request: Request, background_tasks: BackgroundTasks):
                 "status": "completed"
             }).eq("id", job_id).execute()
 
-            print("Job completed:", job_id)
+            print("✅ Job completed:", job_id)
 
         except Exception:
             error_text = traceback.format_exc()
 
-            print("Job failed:", job_id)
+            print("❌ Job failed:", job_id)
             print(error_text)
 
             supabase.table("jobs").update({

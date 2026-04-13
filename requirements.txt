@@ -2,6 +2,5 @@ fastapi
 uvicorn
 pandas
 scikit-learn
-sentence-transformers
 supabase
 python-dotenv
