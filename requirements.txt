@@ -1,7 +1,5 @@
 fastapi
-uvicorn
-pandas
-scikit-learn
+onnxruntime
+tokenizers
 supabase
 python-dotenv
-sentence-transformers
