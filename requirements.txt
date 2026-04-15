@@ -1,6 +1,11 @@
+wheel
+setuptools
 fastapi
-uvicorn
+uvicorn[standard]
 pandas
 scikit-learn
 supabase
 python-dotenv
+sentence-transformers
+--extra-index-url https://pytorch.org
+torch

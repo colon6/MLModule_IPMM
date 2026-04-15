@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environment
+.venv/
+venv/
+
+# Environment variables (SECURITY CRITICAL)
+.env
+
+# IDE files
+.idea/
+.vscode/
+
+# Git
+.git/
+.github/
+
+# OS files
+.DS_Store
