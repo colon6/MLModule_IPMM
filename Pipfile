@@ -16,7 +16,6 @@ supabase = "*"
 python-dotenv = "*"
 uvicorn = {extras = ["standard"], version = "*"}
 onnxruntime = "*"
-huggingface-hub = "*"
 
 [dev-packages]
 
