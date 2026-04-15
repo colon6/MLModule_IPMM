@@ -1,11 +1,5 @@
-wheel
-setuptools
 fastapi
-uvicorn[standard]
-pandas
-scikit-learn
+onnxruntime
+tokenizers
 supabase
 python-dotenv
-sentence-transformers
---extra-index-url https://pytorch.org
-torch
