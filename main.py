@@ -92,6 +92,57 @@ def run_matching_logic(chosen_term: str, job_id: str):
         # Cosine similarity = dot product (embeddings are L2 normalized)
         sim_matrix = intern_embeddings @ project_embeddings.T  # (n_interns, n_projects)
 
+        # GALE-SHAPLEY implementation
+        n_interns, n_projects = sim_matrix.shape
+        
+        # Extract project capacities (default to 1 if not exactly specified)
+        project_caps = [p.get("intern_cap", 1) for p in projects]
+        # Handle case where intern_cap exists in the dictionary but its value is None
+        project_caps = [cap if cap is not None else 1 for cap in project_caps]
+        
+        # Build preference lists for interns (indices of projects sorted by similarity descending)
+        intern_prefs = []
+        for i in range(n_interns):
+            # argsort sorts ascending, so we reverse it
+            prefs = np.argsort(sim_matrix[i])[::-1]
+            intern_prefs.append(list(prefs))
+            
+        intern_free = list(range(n_interns))
+        intern_next_proposal = [0] * n_interns
+        project_matches = {j: [] for j in range(n_projects)} # proj_idx -> list of intern_idx
+        
+        while intern_free:
+            i = intern_free.pop(0)
+            
+            if intern_next_proposal[i] >= n_projects:
+                continue # Exhausted all projects (should only happen if all projects are full)
+                
+            j = intern_prefs[i][intern_next_proposal[i]]
+            intern_next_proposal[i] += 1
+            
+            score_i = sim_matrix[i, j]
+            cap = project_caps[j]
+            
+            if len(project_matches[j]) < cap:
+                project_matches[j].append(i)
+                # Sort accepted interns by their score so the worst is at the end
+                project_matches[j].sort(key=lambda idx: sim_matrix[idx, j], reverse=True)
+            else:
+                # Compare with the worst accepted intern (last in the sorted list)
+                worst_match_i = project_matches[j][-1]
+                if score_i > sim_matrix[worst_match_i, j]:
+                    project_matches[j][-1] = i
+                    project_matches[j].sort(key=lambda idx: sim_matrix[idx, j], reverse=True)
+                    intern_free.append(worst_match_i)
+                else:
+                    intern_free.append(i)
+                    
+        # Reverse mapping from intern -> project
+        intern_to_project = {}
+        for j, matched_interns in project_matches.items():
+            for i in matched_interns:
+                intern_to_project[i] = j
+
         match_id = str(uuid.uuid4())
         results  = []
 
@@ -108,12 +159,15 @@ def run_matching_logic(chosen_term: str, job_id: str):
                 for rank, pi in enumerate(top_indices, start=1)
             ]
 
+            assigned_proj_idx = intern_to_project.get(i)
+            recommended_id = projects[assigned_proj_idx]["id"] if assigned_proj_idx is not None else None
+
             results.append({
                 "match_id":               match_id,
                 "intern_id":              intern["id"],
                 "term":                   chosen_term,
                 "projects":               project_list,
-                "recommended_project_id": project_list[0]["project_id"],
+                "recommended_project_id": recommended_id,
                 "status":                 "pending",
             })
 

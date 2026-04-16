@@ -4,11 +4,11 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-fastapi = "*"
 supabase = "*"
 python-dotenv = "*"
 onnxruntime = "*"
 tokenizers = "*"
+fastapi = "*"
 
 [dev-packages]
 
